@@ -8,10 +8,27 @@ import base64
 import tempfile
 import os
 from dotenv import load_dotenv
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 # Load environment variables from .env file
 load_dotenv()
 
+# --- API Key Protection ---
+MCP_API_KEY = os.getenv("MCP_API_KEY")
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if MCP_API_KEY:
+            provided_key = request.headers.get("x-mcp-key")
+            if provided_key != MCP_API_KEY:
+                return JSONResponse(
+                    {"error": "Unauthorized"},
+                    status_code=401
+                )
+        return await call_next(request)
+
+# --- End API Key Protection ---
 
 INSTRUCTIONS = """
 This server provides access to Meta's Ad Library data through the ScrapeCreators API.
@@ -30,6 +47,7 @@ mcp = FastMCP(
    instructions=INSTRUCTIONS
 )
 
+mcp.app.add_middleware(APIKeyMiddleware)
 
 @mcp.tool(
   description="Search for companies or brands in the Meta Ad Library and return their platform IDs. Use this tool when you need to find a brand's Meta Platform ID before retrieving their ads. This tool searches the Facebook Ad Library to find matching brands and their associated Meta Platform IDs for ad retrieval.",
