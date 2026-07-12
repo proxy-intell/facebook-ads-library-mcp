@@ -974,8 +974,8 @@ Provide detailed, factual observations that would help understand the video's ma
         gemini_file = None
         try:
             # Upload video to Gemini File API
-            gemini_file = upload_video_to_gemini(video_path)
-            
+            gemini_file = upload_video_to_gemini(model, video_path)
+
             # Analyze video with Gemini
             analysis_text = analyze_video_with_gemini(model, gemini_file, analysis_prompt)
             
@@ -996,7 +996,7 @@ Provide detailed, factual observations that would help understand the video's ma
             
             # Cleanup Gemini file to save storage
             if gemini_file:
-                cleanup_gemini_file(gemini_file.name)
+                cleanup_gemini_file(model, gemini_file.name)
             
             return {
                 "success": True,
@@ -1016,7 +1016,7 @@ Provide detailed, factual observations that would help understand the video's ma
             # Cleanup Gemini file in case of error
             if gemini_file:
                 try:
-                    cleanup_gemini_file(gemini_file.name)
+                    cleanup_gemini_file(model, gemini_file.name)
                 except:
                     pass
             raise e
@@ -1193,7 +1193,7 @@ def analyze_ad_videos_batch(media_urls: List[str], brand_names: Optional[List[st
             if video_paths:
                 # Upload videos to Gemini in batch
                 try:
-                    gemini_files = upload_videos_batch_to_gemini(video_paths)
+                    gemini_files = upload_videos_batch_to_gemini(model, video_paths)
                     
                     if gemini_files:
                         # Create analysis prompt template
@@ -1287,7 +1287,7 @@ Provide detailed, factual observations that would help understand the video's ma
                                 })
                         
                         # Cleanup Gemini files
-                        cleanup_gemini_files_batch([f.name for f in gemini_files])
+                        cleanup_gemini_files_batch(model, [f.name for f in gemini_files])
                         
                 except Exception as e:
                     logger.error(f"Batch video analysis failed: {str(e)}")
