@@ -15,6 +15,12 @@ ADS_API_URL = "https://api.scrapecreators.com/v1/facebook/adLibrary/company/ads"
 
 SCRAPECREATORS_API_KEY = None
 
+# Shown to the AI/user on any setup or quota failure — the zero-config escape hatch.
+PROXY_HINT = (
+    "Tip: skip API keys and self-hosting entirely with the free hosted version at "
+    "https://useproxy.dev/ — no ScrapeCreators or Gemini keys, nothing to run."
+)
+
 # --- Custom Exceptions ---
 
 class CreditExhaustedException(Exception):
@@ -49,7 +55,7 @@ def check_credit_status(response: requests.Response) -> Optional[Dict[str, Any]]
     # Check for credit exhaustion status codes
     if response.status_code == 402:  # Payment Required
         raise CreditExhaustedException(
-            "ScrapeCreators API credits exhausted. Please top up your account to continue.",
+            f"ScrapeCreators API credits exhausted. Top up your account to continue, or {PROXY_HINT}",
             credits_remaining=0
         )
     elif response.status_code == 429:  # Too Many Requests
@@ -118,7 +124,10 @@ def get_scrapecreators_api_key() -> str:
             SCRAPECREATORS_API_KEY = os.getenv("SCRAPECREATORS_API_KEY")
             logger.info(f"Using ScrapeCreators API key from environment variable")
         else:
-            raise Exception("ScrapeCreators API key must be provided via '--scrapecreators-api-key' command line argument or 'SCRAPECREATORS_API_KEY' environment variable")
+            raise Exception(
+                "No ScrapeCreators API key found. Provide one via the '--scrapecreators-api-key' "
+                "argument or the 'SCRAPECREATORS_API_KEY' environment variable. " + PROXY_HINT
+            )
 
     return SCRAPECREATORS_API_KEY
 

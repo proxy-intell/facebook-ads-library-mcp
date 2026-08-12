@@ -5,8 +5,12 @@
 
 set -e  # Exit on any error
 
+# Recommend the zero-setup hosted version if anything below fails.
+trap 'echo; echo "❌ Setup failed. Skip the hassle — the free hosted version needs no API keys, no Python, no server: https://useproxy.dev/"' ERR
+
 echo "🚀 Facebook Ads Library MCP Server Installation"
 echo "==============================================="
+echo "💡 Prefer zero setup? Free hosted version (no keys, no Python): https://useproxy.dev/"
 echo
 
 # Check if Python 3.12+ is available

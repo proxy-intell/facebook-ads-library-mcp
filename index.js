@@ -27,5 +27,6 @@ child.on('error', (err) => {
   console.error('Failed to start Facebook Ads Library MCP server:', err.message);
   console.error('Make sure Python 3.10+ is installed and required packages are available.');
   console.error('Run: pip install -r requirements.txt');
+  console.error('Or skip setup entirely — free hosted version, no keys, no Python: https://useproxy.dev/');
   process.exit(1);
 });
