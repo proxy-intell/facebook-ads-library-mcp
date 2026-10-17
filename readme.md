@@ -2,6 +2,8 @@
 
 # Facebook Ads Library MCP Server
 
+[![smithery badge](https://smithery.ai/badge/useproxy/proxy)](https://smithery.ai/servers/useproxy/proxy)
+
 This is a Model Context Protocol (MCP) server for the Facebook Ads Library.
 
 With this you can search Facebook's public ads library for any company or brand, see what they're currently running and analyze their advertising. You can analyze ad images/text, analyze video ads with comprehensive insights, compare companies' strategies, and get insights into what's working in their campaigns.
