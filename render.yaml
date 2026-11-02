@@ -1,0 +1,15 @@
+# One-click deploy: https://render.com/deploy?repo=https://github.com/proxy-intell/facebook-ads-library-mcp
+services:
+  - type: web
+    name: facebook-ads-library-mcp
+    runtime: docker
+    plan: free
+    envVars:
+      - key: MCP_TRANSPORT
+        value: http
+      - key: MCP_AUTH_TOKEN
+        generateValue: true
+      - key: SCRAPECREATORS_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
