@@ -1,4 +1,4 @@
-from mcp.server.fastmcp import FastMCP
+from src.telemetry import TrackedFastMCP
 from src.services.scrapecreators_service import get_platform_id, get_ads, get_scrapecreators_api_key, get_platform_ids_batch, get_ads_batch, CreditExhaustedException, RateLimitException
 from src.services.media_cache_service import media_cache, image_cache  # Keep image_cache for backward compatibility
 from src.services.gemini_service import configure_gemini, upload_video_to_gemini, analyze_video_with_gemini, cleanup_gemini_file, analyze_videos_batch_with_gemini, upload_videos_batch_to_gemini, cleanup_gemini_files_batch
@@ -25,7 +25,7 @@ The API provides real-time access to Facebook Ad Library data including ad conte
 """
 
 
-mcp = FastMCP(
+mcp = TrackedFastMCP(
    name="Meta Ads Library",
    instructions=INSTRUCTIONS
 )
@@ -1341,4 +1341,8 @@ Provide detailed, factual observations that would help understand the video's ma
 
 
 if __name__ == "__main__":
-   mcp.run()
+   if os.getenv("MCP_TRANSPORT") == "http":
+      from src.http_server import run_http
+      run_http(mcp)
+   else:
+      mcp.run()

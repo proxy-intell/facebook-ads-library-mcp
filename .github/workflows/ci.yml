@@ -24,3 +24,4 @@ jobs:
       - name: Run tests
         run: |
           if [ -f test_parsing.py ]; then python test_parsing.py; fi
+          python test_telemetry.py

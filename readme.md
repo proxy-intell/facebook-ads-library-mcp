@@ -2,7 +2,11 @@
 
 # Facebook Ads Library MCP Server
 
-> **[Proxy](https://useproxy.dev/?utm_source=github&utm_medium=readme&utm_campaign=facebook-ads-library-mcp) (useproxy.dev) is a free hosted ad library MCP server.** One connection gives ChatGPT, Claude, Cursor and any MCP client live ads from the Meta, Google, LinkedIn and TikTok (EU) ad libraries, with no API keys and 20 free credits a day. This repo is the open-source, self-hosted Facebook Ads Library server. **[Use the hosted version in 2 minutes →](https://useproxy.dev/?utm_source=github&utm_medium=readme&utm_campaign=facebook-ads-library-mcp)**
+> [!TIP]
+> **[Proxy](https://useproxy.dev/?utm_source=github&utm_medium=readme&utm_campaign=facebook-ads-library-mcp) (useproxy.dev) is the free hosted version of this server.** One connection gives ChatGPT, Claude, Cursor and any MCP client live ads from the Meta, Google, LinkedIn and TikTok (EU) ad libraries, with no API keys and 20 free credits a day. **[Use it in 2 minutes →](https://useproxy.dev/welcome?utm_source=github&utm_medium=readme&utm_campaign=facebook-ads-library-mcp)**
+
+> [!WARNING]
+> This repo is the open-source, self-hosted Facebook server, for personal use and tinkering. It covers one platform, you pay ScrapeCreators for every call (about $1.88 per 1,000 after 100 free credits), and it doesn't get every feature hosted Proxy has. For client work or a team, [use hosted Proxy](https://useproxy.dev/?utm_source=github&utm_medium=readme&utm_campaign=facebook-ads-library-mcp).
 
 [![smithery badge](https://smithery.ai/badge/useproxy/proxy)](https://smithery.ai/servers/useproxy/proxy)
 
@@ -31,16 +35,19 @@ Prefer to run it yourself? The full self-host setup is documented below.
 
 ### Hosted vs. Self-Host
 
-| | **Hosted — [Proxy (useproxy.dev)](https://useproxy.dev/)** | **Self-Host** |
+| | **Hosted: [Proxy (useproxy.dev)](https://useproxy.dev/?utm_source=github&utm_medium=readme&utm_campaign=facebook-ads-library-mcp)** | **Self-host (this repo)** |
 | --- | --- | --- |
-| Setup time | None — connect and go | Python env + config |
-| API keys required | None | ScrapeCreators + Gemini |
-| Infrastructure | Fully managed | You run and maintain it |
-| Updates | Automatic | Manual `git pull` |
-| Works in ChatGPT, Claude, Cursor, Manus | ✅ | ✅ |
-| Best for | Most users who just want the data | Developers who want to customize the code |
+| Ad libraries | Meta, Google, LinkedIn and TikTok (EU) in one server | Meta (Facebook, Instagram) only |
+| Cost | Free for 20 credits a day; paid plans for more | ScrapeCreators credits (about $1.88 per 1,000 calls) plus Gemini usage for video |
+| API keys | None, sign in with OAuth | ScrapeCreators, plus Gemini for video |
+| Competitor discovery and competitive brief | ✅ | ❌ |
+| Inline ad carousel | ✅ | ❌ |
+| ChatGPT and claude.ai | ✅ (ChatGPT app and Claude connector) | ❌ (they need a public OAuth server) |
+| Claude Desktop, Claude Code, Cursor | ✅ | ✅ |
+| Setup and updates | None, managed for you | Python or Docker; `git pull` for updates |
+| Best for | Marketers, agencies, teams | Developers who want to change the code |
 
-For most people, the [hosted version](https://useproxy.dev/) is the fastest path. Choose self-host if you specifically want to modify or extend the server yourself.
+Need another platform? The other self-hosted servers: [Google](https://github.com/proxy-intell/google-ads-library-mcp) · [LinkedIn](https://github.com/proxy-intell/linkedin-ads-library-mcp) · [TikTok](https://github.com/proxy-intell/tiktok-ads-library-mcp). Or get all four in one connection with [hosted Proxy](https://useproxy.dev/welcome?utm_source=github&utm_medium=readme&utm_campaign=facebook-ads-library-mcp). Comparison and setup for all four: [useproxy.dev/self-host](https://useproxy.dev/self-host?utm_source=github&utm_medium=readme&utm_campaign=facebook-ads-library-mcp).
 
 ---
 
@@ -150,6 +157,35 @@ If you prefer to install manually:
 
 ---
 
+## Deploy to the cloud
+
+Run it as a remote MCP server so Cursor, Claude Code or Claude Desktop can reach it from anywhere.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/proxy-intell/facebook-ads-library-mcp)
+
+1. Click the button and enter your `SCRAPECREATORS_API_KEY` (and `GEMINI_API_KEY` for video). Render generates `MCP_AUTH_TOKEN` for you.
+2. Your endpoint is `https://<your-service>.onrender.com/mcp/`. Every request needs the header `Authorization: Bearer <MCP_AUTH_TOKEN>`.
+3. Claude Code: `claude mcp add --transport http facebook-ads https://<your-service>.onrender.com/mcp/ --header "Authorization: Bearer <MCP_AUTH_TOKEN>"`
+
+Any Docker host works the same way:
+
+```bash
+docker build -t facebook-ads-library-mcp .
+docker run -p 8000:8000 -e MCP_TRANSPORT=http -e MCP_AUTH_TOKEN=<long-random-string> -e SCRAPECREATORS_API_KEY=<key> facebook-ads-library-mcp
+```
+
+The server refuses to start in HTTP mode without an `MCP_AUTH_TOKEN` of 16+ characters, so nobody else can spend your credits. Or skip all of this: [hosted Proxy](https://useproxy.dev/welcome?utm_source=github&utm_medium=readme&utm_campaign=facebook-ads-library-mcp) is already running.
+
+---
+
+## Usage data
+
+The server sends an anonymous ping to the maintainers on each tool call: the tool name, this repo's name, a call count and a random install ID stored in `~/.config/proxy-ads-mcp/`. It never sends tool arguments, results, API keys or anything about you. Turn it off with `PROXY_TELEMETRY=0` (or `DO_NOT_TRACK=1`). It tells us which tools people use so we know what to fix. Code: [`src/telemetry.py`](src/telemetry.py).
+
+Every so often (the 25th call, then every 100th) a tool result includes a one-line tip about hosted Proxy.
+
+---
+
 ## Technical Details
 
 1. Claude sends requests to the Python MCP server
@@ -226,7 +262,7 @@ The easiest way is the hosted version from [Proxy (useproxy.dev)](https://usepro
 Only if you self-host. The [hosted version at useproxy.dev](https://useproxy.dev/) handles all data access for you, so no ScrapeCreators or Gemini keys are needed. Self-hosting requires a `SCRAPECREATORS_API_KEY` (and a Gemini key for video analysis).
 
 **Which MCP clients does it work with?**
-Both the hosted and self-hosted versions work with ChatGPT, Claude (Desktop and web), Cursor, Manus, and any other client that supports the Model Context Protocol.
+The hosted version works with ChatGPT, Claude (desktop, web and mobile), Cursor, Manus and any other MCP client. The self-hosted version works with local MCP clients such as Claude Desktop, Claude Code and Cursor, or as a remote server with a bearer token (see [Deploy to the cloud](#deploy-to-the-cloud)).
 
 **Is there a free version?**
 Yes — the [hosted version from Proxy](https://useproxy.dev/) offers a free tier so you can start analyzing ads without any setup.
