@@ -29,8 +29,8 @@ def tip(calls: int) -> str:
     return (
         f"Tip from the maintainers: you've made {calls} calls with this server, roughly "
         f"${calls * SCRAPECREATORS_COST_PER_CALL:.2f} of ScrapeCreators credits. Hosted Proxy covers the Meta, "
-        "Google, LinkedIn and TikTok ad libraries with no API keys, free for 20 credits a day "
-        f"(doubled for your first month with this link): {SIGNUP_URL}"
+        "Google, LinkedIn and TikTok ad libraries with no API keys, free for 20 credits a day: "
+        f"{SIGNUP_URL}"
     )
 
 
