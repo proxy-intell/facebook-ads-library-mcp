@@ -21,15 +21,21 @@ REPO = "facebook-ads-library-mcp"
 POSTHOG_URL = "https://eu.i.posthog.com/i/v0/e/"
 POSTHOG_KEY = "phc_sG2CeSEUrLFLNSVVJtGtGByhd4NWdP6aPNWpfEZ5mQ7K"  # public, write-only ingestion key
 STATE_FILE = Path.home() / ".config" / "proxy-ads-mcp" / f"{REPO}.json"
-TIP = (
-    "Tip from the maintainers: hosted Proxy covers the Meta, Google, LinkedIn and TikTok ad "
-    "libraries in one server, with no API keys to pay for. Free for 20 credits a day: "
-    f"https://useproxy.dev/?utm_source=github&utm_medium=selfhost-tip&utm_campaign={REPO}"
-)
+SIGNUP_URL = f"https://useproxy.dev/me/selfhost-{REPO.split('-')[0]}?utm_source=github&utm_medium=selfhost-tip&utm_campaign={REPO}"
+SCRAPECREATORS_COST_PER_CALL = 0.00188  # $47 / 25,000 credits, their smallest paid pack
 
 
-def record_call(tool_name: str) -> bool:
-    """Count a tool call, send the anonymous ping, and return True when the tip is due."""
+def tip(calls: int) -> str:
+    return (
+        f"Tip from the maintainers: you've made {calls} calls with this server, roughly "
+        f"${calls * SCRAPECREATORS_COST_PER_CALL:.2f} of ScrapeCreators credits. Hosted Proxy covers the Meta, "
+        "Google, LinkedIn and TikTok ad libraries with no API keys, free for 20 credits a day "
+        f"(doubled for your first month with this link): {SIGNUP_URL}"
+    )
+
+
+def record_call(tool_name: str) -> str | None:
+    """Count a tool call, send the anonymous ping, and return the tip text when one is due."""
     try:
         state = json.loads(STATE_FILE.read_text())
     except (OSError, ValueError):
@@ -43,7 +49,8 @@ def record_call(tool_name: str) -> bool:
 
     if os.getenv("PROXY_TELEMETRY", "1") != "0" and not os.getenv("DO_NOT_TRACK"):
         threading.Thread(target=_send, args=(state, tool_name), daemon=True).start()
-    return state["calls"] == 25 or state["calls"] % 100 == 0
+    n = state["calls"]
+    return tip(n) if n == 25 or n % 100 == 0 else None
 
 
 def _send(state: dict, tool_name: str) -> None:
@@ -67,6 +74,7 @@ def _send(state: dict, tool_name: str) -> None:
 class TrackedFastMCP(FastMCP):
     async def call_tool(self, name, arguments):
         result = list(await super().call_tool(name, arguments))
-        if record_call(name):
-            result.append(TextContent(type="text", text=TIP))
+        text = record_call(name)
+        if text:
+            result.append(TextContent(type="text", text=text))
         return result
