@@ -14,7 +14,7 @@ This is a Model Context Protocol (MCP) server for the Facebook Ads Library.
 
 With this you can search Facebook's public ads library for any company or brand, or by keyword across every advertiser, see what they're currently running and analyze their advertising. You can analyze ad images/text, analyze video ads with comprehensive insights, compare companies' strategies, track what competitors launched since last week, and get insights into what's working in their campaigns.
 
-**New in v1.1:** keyword search across the whole library, "what changed since last fetch" on every brand pull, five built-in research playbooks, and video analysis on current Gemini models. See the [release notes](https://github.com/proxy-intell/facebook-ads-library-mcp/releases).
+**New in v1.1:** keyword search across the whole library, "what changed since last fetch" on every brand pull, five built-in research playbooks, and video analysis on current Gemini models. See the [changelog](CHANGELOG.md).
 
 Here's an example of what you can do when it's connected to Claude.
 
