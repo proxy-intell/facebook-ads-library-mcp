@@ -22,6 +22,4 @@ jobs:
       - name: Syntax check
         run: python -m py_compile mcp_server.py
       - name: Run tests
-        run: |
-          if [ -f test_parsing.py ]; then python test_parsing.py; fi
-          python test_telemetry.py
+        run: for t in test_*.py; do python "$t" || exit 1; done

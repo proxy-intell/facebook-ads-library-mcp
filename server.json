@@ -6,12 +6,12 @@
     "url": "https://github.com/proxy-intell/facebook-ads-library-mcp",
     "source": "github"
   },
-  "version": "1.0.0",
+  "version": "1.1.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@proxy-intell/facebook-ads-library-mcp",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "transport": {
         "type": "stdio"
       }

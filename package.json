@@ -1,6 +1,6 @@
 {
   "name": "@proxy-intell/facebook-ads-library-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "The most visual MCP server for the Facebook Ad Library. Search any advertiser and your AI surfaces real creatives in-context.",
   "main": "index.js",
   "bin": {
