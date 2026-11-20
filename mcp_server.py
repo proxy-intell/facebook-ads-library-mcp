@@ -1,28 +1,45 @@
-from src.telemetry import TrackedFastMCP
-from src.services.scrapecreators_service import get_platform_id, get_ads, get_scrapecreators_api_key, get_platform_ids_batch, get_ads_batch, CreditExhaustedException, RateLimitException
-from src.services.media_cache_service import media_cache, image_cache  # Keep image_cache for backward compatibility
-from src.services.gemini_service import configure_gemini, upload_video_to_gemini, analyze_video_with_gemini, cleanup_gemini_file, analyze_videos_batch_with_gemini, upload_videos_batch_to_gemini, cleanup_gemini_files_batch
-from typing import Dict, Any, List, Optional, Union
-import requests
-import base64
-import tempfile
-import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load .env before the services read their settings (GEMINI_MODEL, API keys).
 load_dotenv()
+
+from src.telemetry import TrackedFastMCP
+from src.services.scrapecreators_service import get_platform_id, get_ads, get_scrapecreators_api_key, get_platform_ids_batch, get_ads_batch, search_ads, SEARCH_SORTS, SEARCH_STATUSES, SEARCH_MEDIA_TYPES, SEARCH_TYPES, CreditExhaustedException, RateLimitException
+from src.services.media_cache_service import media_cache, image_cache  # Keep image_cache for backward compatibility
+from src.services.gemini_service import GEMINI_MODEL, configure_gemini, upload_video_to_gemini, analyze_video_with_gemini, cleanup_gemini_file
+from src import ad_history
+from src.playbooks import PLAYBOOKS, TRIGGERS
+from mcp.server.fastmcp import Image
+from typing import Dict, Any, List, Optional, Union
+import json
+import re
+import requests
+import os
 
 
 INSTRUCTIONS = """
-This server provides access to Meta's Ad Library data through the ScrapeCreators API.
-It allows you to search for companies/brands and retrieve their currently running advertisements.
+This server provides access to Meta's Ad Library (Facebook, Instagram) through the ScrapeCreators API.
 
 Workflow:
-1. Use get_meta_platform_id to search for a brand and get their Meta Platform ID
-2. Use get_meta_ads to retrieve the brand's current ads using the platform ID
+1. A brand's ads: get_meta_platform_id finds its page ID, then get_meta_ads returns its ads.
+2. Ads by topic, product or phrase, any advertiser: search_meta_ads_by_keyword.
+3. Creatives: analyze_ad_image and analyze_ad_video on any returned media_url.
 
-The API provides real-time access to Facebook Ad Library data including ad content, media, dates, and targeting information.
+Re-running get_meta_ads for a page 24h+ later reports which ads are new and how many dropped
+out since the last fetch. For a research job (video scripts, competitor teardown, product
+hunting, prospect lists, weekly competitor tracking) call get_playbook first and follow it.
 """
+
+
+IMAGE_ANALYSIS_PROMPT = """Analyze this ad image and extract:
+- Overall: what is shown, the story or message, emotional tone.
+- Text: transcribe ALL text; tag each as Headline Hook, Value Proposition, CTA, Disclaimer, Brand Name or Other.
+- People: age range, gender, appearance, pose, expression, setting.
+- Brand: logos (position), products shown, brand colors.
+- Composition: layout, visual hierarchy (first, second, third), text overlay vs separate text.
+- Style: dominant colors, background, photography style (studio, UGC, lifestyle), filters.
+- Audience cues: who this targets and why.
+Report facts first; mark inference as such."""
 
 
 mcp = TrackedFastMCP(
@@ -187,7 +204,7 @@ def get_meta_platform_id(brand_names: Union[str, List[str]]) -> Dict[str, Any]:
 
 
 @mcp.tool(
-  description="Retrieve currently running ads for a brand using their Meta Platform ID. Use this tool after getting a platform ID from get_meta_platform_id. This tool fetches active advertisements from the Meta Ad Library, including ad content, media URLs, dates, and targeting information. For complete analysis of visual elements, colors, design, or image content, you MUST also use analyze_ad_image on the media_url from each ad.",
+  description="Retrieve currently running ads for a brand using their Meta Platform ID. Use this tool after getting a platform ID from get_meta_platform_id. This tool fetches active advertisements from the Meta Ad Library, including ad content, media URLs, dates, and targeting information. The result's changes block lists ads launched in the last 7 days and, when the same page was fetched with the same filters 24h+ ago, which ads are new since then and how many dropped out. For complete analysis of visual elements, colors, design, or image content, you MUST also use analyze_ad_image on the media_url from each ad.",
   annotations={
     "title": "Get Meta Ad Library Ads",
     "readOnlyHint": True,
@@ -296,35 +313,42 @@ def get_meta_ads(
             total_count = len(ads)
             batch_info = None
             platform_desc = platform_list[0]
+            changes = ad_history.changes(f"meta:{platform_list[0]}:{country}:{limit}", ads)
         else:
             # Batch request
             batch_results = get_ads_batch(platform_list, limit or 50, country, trim)
             results = batch_results
-            total_count = sum(len(ads) for ads in batch_results.values())
-            successful_platforms = sum(1 for ads in batch_results.values() if ads)
+            fetched = {pid: ads for pid, ads in batch_results.items() if isinstance(ads, list)}
+            total_count = sum(len(ads) for ads in fetched.values())
             batch_info = {
                 "total_requested": len(platform_list),
-                "successful": successful_platforms,
-                "failed": len(platform_list) - successful_platforms,
+                "successful": len(fetched),
+                "failed": len(batch_results) - len(fetched),
                 "api_calls_used": len(platform_list)  # One call per platform ID
             }
             platform_desc = f"{len(platform_list)} platform IDs"
+            changes = {pid: ad_history.changes(f"meta:{pid}:{country}:{limit}", ads) for pid, ads in fetched.items()}
         
+        failed_note = ""
+        if batch_info and batch_info["failed"]:
+            failed_note = f" {batch_info['failed']} lookup(s) failed: see the error in results; a failed lookup is not 'no ads'."
         if total_count == 0:
             return {
                 "success": True,
-                "message": f"No current ads found for {platform_desc} in the Meta Ad Library.",
+                "message": f"No current ads found for {platform_desc} in the Meta Ad Library.{failed_note}",
                 "results": results,
                 "batch_info": batch_info,
+                "changes": changes,
                 "count": 0,
                 "error": None
             }
         
         return {
             "success": True,
-            "message": f"Successfully retrieved {total_count} ads for {platform_desc} from the Meta Ad Library.",
+            "message": f"Successfully retrieved {total_count} ads for {platform_desc} from the Meta Ad Library.{failed_note}",
             "results": results,
             "batch_info": batch_info,
+            "changes": changes,
             "count": total_count,
             "ad_library_url": "https://www.facebook.com/ads/library/",
             "source_citation": f"[Facebook Ad Library - {platform_desc}](https://www.facebook.com/ads/library/)",
@@ -378,213 +402,139 @@ def get_meta_ads(
 
 
 @mcp.tool(
-  description="REQUIRED for analyzing images from Facebook ads. Download and analyze ad images to extract visual elements, text content, colors, people, brand elements, and composition details. This tool should be used for EVERY image URL returned by get_meta_ads when doing comprehensive analysis. Uses intelligent caching so multiple image analysis calls are efficient and cost-free.",
+  description="Search the whole Meta Ad Library by keyword, topic or phrase, without knowing the advertiser. Use it to find who advertises a product or problem, ads in a niche, or partnership ads run through creators (get_meta_ads only returns a brand's own page). Returns ads with page_id and page_name, so you can follow up with get_meta_ads on any advertiser.",
+  annotations={
+    "title": "Search Meta Ads by Keyword",
+    "readOnlyHint": True,
+    "openWorldHint": True
+  }
+)
+def search_meta_ads_by_keyword(
+    query: str,
+    country: Optional[str] = None,
+    status: Optional[str] = None,
+    media_type: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    search_type: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: Optional[int] = 30,
+    trim: Optional[bool] = True
+) -> Dict[str, Any]:
+    """Search Meta Ad Library ads by keyword across all advertisers.
+
+    Args:
+        query: Keyword or phrase, e.g. "running shoes".
+        country: Two-letter country code, e.g. "US". Default: all countries.
+        status: "ACTIVE" (default upstream), "INACTIVE" or "ALL".
+        media_type: "all" (default), "image" (stills and carousels) or "video".
+        sort_by: "relevancy_monthly_grouped" (default, on-topic, last month only) or "total_impressions" (biggest advertisers first, any age).
+        search_type: "keyword_unordered" (default) or "keyword_exact_phrase" (better for multi-word product names).
+        start_date: Only ads shown from this date, YYYY-MM-DD.
+        end_date: Only ads shown up to this date, YYYY-MM-DD.
+        limit: Max ads to return (default 30, max 150). Each page of results is one ScrapeCreators credit.
+        trim: True (default) returns essential fields only.
+
+    Returns:
+        success, message, results (ads), count, total_matches (library-wide), cursor, error.
+    """
+    if not query or not query.strip():
+        return {"success": False, "message": "query must be a non-empty keyword or phrase.", "results": [], "count": 0, "error": "Missing query"}
+    status = status.upper() if status else None
+    media_type = media_type.lower() if media_type else None
+    checks = [
+        ("status", status, SEARCH_STATUSES),
+        ("media_type", media_type, SEARCH_MEDIA_TYPES),
+        ("sort_by", sort_by, SEARCH_SORTS),
+        ("search_type", search_type, SEARCH_TYPES),
+    ]
+    for name, value, allowed in checks:
+        if value and value not in allowed:
+            return {"success": False, "message": f"{name} must be one of {', '.join(allowed)}; got '{value}'.", "results": [], "count": 0, "error": f"Invalid {name}"}
+    for name, value in (("start_date", start_date), ("end_date", end_date)):
+        if value and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            return {"success": False, "message": f"{name} must be YYYY-MM-DD; got '{value}'.", "results": [], "count": 0, "error": f"Invalid {name}"}
+    if country and len(country) != 2:
+        return {"success": False, "message": "country must be a 2-letter code, e.g. 'US'.", "results": [], "count": 0, "error": "Invalid country"}
+
+    try:
+        found = search_ads(query.strip(), min(max(limit or 30, 1), 150), country.upper() if country else None,
+                           status, media_type, sort_by, search_type, start_date, end_date, trim is not False)
+        ads = found["ads"]
+        return {
+            "success": True,
+            "message": f"Found {len(ads)} ads matching '{query}'" + (f" (about {found['total']} in the library)" if found["total"] else "") + ".",
+            "results": ads,
+            "count": len(ads),
+            "total_matches": found["total"],
+            "cursor": found["cursor"],
+            "ad_library_url": "https://www.facebook.com/ads/library/",
+            "error": None
+        }
+    except CreditExhaustedException as e:
+        return {"success": False, "message": f"ScrapeCreators API credits exhausted. Top up at {e.topup_url}.", "results": [], "count": 0, "error": f"Credit exhaustion: {str(e)}"}
+    except RateLimitException as e:
+        return {"success": False, "message": f"ScrapeCreators API rate limit exceeded. Wait {e.retry_after or 'a few minutes'} and retry.", "results": [], "count": 0, "error": f"Rate limit exceeded: {str(e)}"}
+    except Exception as e:
+        return {"success": False, "message": f"Keyword search for '{query}' failed: {str(e)}", "results": [], "count": 0, "error": str(e)}
+
+
+@mcp.tool(
+  description="Analyze a Facebook ad image: returns the image itself so you can see it, plus a checklist (text, hooks, people, brand elements, composition, colors). Pass one media_url from get_meta_ads or search_meta_ads_by_keyword. Downloads are cached locally.",
   annotations={
     "title": "Analyze Ad Image Content",
     "readOnlyHint": True,
     "openWorldHint": True
   }
 )
-def analyze_ad_image(media_urls: Union[str, List[str]], brand_name: Optional[str] = None, ad_id: Optional[str] = None) -> Dict[str, Any]:
-    """Download Facebook ad image(s) and prepare them for visual analysis by Claude Desktop.
-    
-    This tool downloads images from Facebook Ad Library URLs and provides them in a format
-    that Claude Desktop can analyze using its vision capabilities. Images are cached locally
-    to avoid re-downloading. Supports both single image analysis and batch processing for
-    efficiency. The tool provides detailed analysis instructions to ensure comprehensive,
-    objective visual analysis.
-    
+def analyze_ad_image(media_url: str, brand_name: Optional[str] = None, ad_id: Optional[str] = None) -> Any:
+    """Download a Facebook ad image and hand it to the model for visual analysis.
+
+    The image comes back as an image content block, so the model sees it with its own vision,
+    plus a short checklist of what to extract. Downloads are cached locally.
+
     Args:
-        media_urls: Single image URL (str) or list of image URLs (List[str]) to analyze.
-                   Examples: "https://...", ["https://image1...", "https://image2..."]
+        media_url: The image URL from a get_meta_ads or search_meta_ads_by_keyword result.
         brand_name: Optional brand name for cache organization.
-        ad_id: Optional ad ID for tracking purposes.
-    
-    Returns:
-        A dictionary containing:
-        - success: Boolean indicating if processing was successful
-        - message: Status message
-        - results: For single input - dict with image data and analysis info
-                  For batch input - list of dicts with each image's data and analysis info
-        - batch_info: Information about batch processing (if applicable)
-        - total_processed: Number of images successfully processed
-        - analysis_instructions: Detailed prompt for objective visual analysis
-        - error: Error details if processing failed
+        ad_id: Optional ad ID, used for the ad library link.
     """
     if not media_url or not media_url.strip():
-        return {
-            "success": False,
-            "message": "Media URL must be provided and cannot be empty.",
-            "cached": False,
-            "analysis": {},
-            "cache_info": {},
-            "error": "Missing or empty media URL"
-        }
-    
+        return {"success": False, "message": "media_url must be provided and cannot be empty.", "error": "Missing media URL"}
+    media_url = media_url.strip()
     try:
-        # Check cache first
-        cached_data = image_cache.get_cached_image(media_url.strip())
-        
-        if cached_data and cached_data.get('analysis_results'):
-            # Return cached analysis results
-            return {
-                "success": True,
-                "message": f"Retrieved cached analysis for {media_url}",
-                "cached": True,
-                "analysis": cached_data['analysis_results'],
-                "cache_info": {
-                    "cached_at": cached_data.get('downloaded_at'),
-                    "analysis_cached_at": cached_data.get('analysis_cached_at'),
-                    "file_size": cached_data.get('file_size'),
-                    "brand_name": cached_data.get('brand_name'),
-                    "ad_id": cached_data.get('ad_id')
-                },
-                "error": None
-            }
-        
-        # Determine if we need to download
-        image_data = None
-        content_type = None
-        file_size = None
-        
-        if cached_data:
-            # Image is cached but no analysis results yet
+        cached = image_cache.get_cached_image(media_url)
+        image_bytes, content_type = None, None
+        if cached:
             try:
-                with open(cached_data['file_path'], 'rb') as f:
+                with open(cached['file_path'], 'rb') as f:
                     image_bytes = f.read()
-                image_data = base64.b64encode(image_bytes).decode('utf-8')
-                content_type = cached_data['content_type']
-                file_size = cached_data['file_size']
-            except Exception as e:
-                # Cache file corrupted, will re-download
-                cached_data = None
-        
-        if not cached_data:
-            # Download the image
-            response = requests.get(media_url.strip(), timeout=30)
+                content_type = cached['content_type']
+            except OSError:
+                cached = None  # cache file gone, download again
+        if not cached:
+            response = requests.get(media_url, timeout=30)
             response.raise_for_status()
-            
-            # Check if it's an image
             content_type = response.headers.get('content-type', '').lower()
-            if not any(img_type in content_type for img_type in ['image/', 'jpeg', 'jpg', 'png', 'gif', 'webp']):
-                return {
-                    "success": False,
-                    "message": f"URL does not point to a valid image. Content type: {content_type}",
-                    "cached": False,
-                    "analysis": {},
-                    "cache_info": {},
-                    "error": f"Invalid content type: {content_type}"
-                }
-            
-            # Cache the downloaded image
-            file_path = image_cache.cache_image(
-                url=media_url.strip(),
-                image_data=response.content,
-                content_type=content_type,
-                brand_name=brand_name,
-                ad_id=ad_id
-            )
-            
-            # Encode for analysis
-            image_data = base64.b64encode(response.content).decode('utf-8')
-            file_size = len(response.content)
-        
-        # Construct comprehensive analysis prompt - let Claude Desktop control presentation
-        analysis_prompt = """
-Analyze this Facebook ad image and extract ALL factual information about:
+            if not content_type.startswith('image/'):
+                return {"success": False, "message": f"URL does not point to an image (content type: {content_type}). Media URLs expire; re-fetch the ad for a fresh one.", "error": f"Invalid content type: {content_type}"}
+            image_cache.cache_image(url=media_url, image_data=response.content, content_type=content_type, brand_name=brand_name, ad_id=ad_id)
+            image_bytes = response.content
 
-**Overall Visual Description:**
-- Complete description of what is shown in the image
-
-**Text Elements:**
-- Identify and transcribe ALL text present in the image
-- Categorize each text element as:
-  * "Headline Hook" (designed to grab attention)
-  * "Value Proposition" (explains the benefit to the viewer)
-  * "Call to Action (CTA)" (tells the viewer what to do next)
-  * "Referral" (prompts the viewer to share the product)
-  * "Disclaimer" (legal text, terms, conditions)
-  * "Brand Name" (company or product names)
-  * "Other" (any other text)
-
-**People Description:**
-- For each person visible: age range, gender, appearance, clothing, pose, facial expression, setting
-
-**Brand Elements:**
-- Logos present (describe and position)
-- Product shots (describe what products are shown)
-- Brand colors or visual identity elements
-
-**Composition & Layout:**
-- Layout structure (grid, asymmetrical, centered, etc.)
-- Visual hierarchy (what draws attention first, second, third)
-- Element positioning (top-left, center, bottom-right, etc.)
-- Text overlay vs separate text areas
-- Use of composition techniques (rule of thirds, leading lines, symmetry, etc.)
-
-**Colors & Visual Style:**
-- List ALL dominant colors (specific color names or hex codes if possible)
-- Background color/type and style
-- Photography style (professional, candid, studio, lifestyle, etc.)
-- Any filters, effects, or styling applied
-
-**Technical & Target Audience Indicators:**
-- Image format and aspect ratio
-- Text readability and contrast
-- Overall image quality
-- Visual cues about target audience (age, lifestyle, interests, demographics)
-- Setting/environment details
-
-**Message & Theme:**
-- What story or message the visual conveys
-- Emotional tone and mood
-- Marketing strategy indicators
-
-Extract ALL this information comprehensively. The presentation format (summary vs detailed breakdown) will be determined based on the user's specific request context.
-"""
-        
-        # Return simplified response for Claude Desktop to process
-        # Include the image data directly for Claude's vision analysis
-        response = {
+        info = {
             "success": True,
-            "message": f"Image downloaded and ready for analysis.",
-            "cached": bool(cached_data),
-            "image_data": image_data,
             "media_url": media_url,
             "brand_name": brand_name,
             "ad_id": ad_id,
-            "analysis_instructions": analysis_prompt,
-            "ad_library_url": "https://www.facebook.com/ads/library/",
-            "source_citation": f"[Facebook Ad Library - {brand_name if brand_name else 'Ad'} #{ad_id if ad_id else 'Unknown'}]({media_url})",
-            "error": None
+            "ad_library_url": f"https://www.facebook.com/ads/library/?id={ad_id}" if ad_id else "https://www.facebook.com/ads/library/",
+            "cache_status": "Used cached image" if cached else "Downloaded and cached new image",
+            "analysis_instructions": IMAGE_ANALYSIS_PROMPT,
         }
-        
-        # Add cache info
-        if cached_data:
-            response["cache_status"] = "Used cached image"
-        else:
-            response["cache_status"] = "Downloaded and cached new image"
-            
-        return response
-        
+        fmt = content_type.split('/')[-1].split(';')[0].replace('jpg', 'jpeg')
+        return [json.dumps(info), Image(data=image_bytes, format=fmt)]
     except requests.exceptions.RequestException as e:
-        return {
-            "success": False,
-            "message": f"Failed to download image from {media_url}: {str(e)}",
-            "cached": False,
-            "analysis": {},
-            "cache_info": {},
-            "error": f"Network error: {str(e)}"
-        }
+        return {"success": False, "message": f"Failed to download image from {media_url}: {str(e)}. Media URLs expire; re-fetch the ad for a fresh one.", "error": f"Network error: {str(e)}"}
     except Exception as e:
-        return {
-            "success": False,
-            "message": f"Failed to process image from {media_url}: {str(e)}",
-            "cached": False,
-            "analysis": {},
-            "cache_info": {},
-            "error": str(e)
-        }
+        return {"success": False, "message": f"Failed to process image from {media_url}: {str(e)}", "error": str(e)}
 
 
 @mcp.tool(
@@ -983,7 +933,7 @@ Provide detailed, factual observations that would help understand the video's ma
             analysis_results = {
                 "raw_analysis": analysis_text,
                 "analysis_timestamp": media_cache._generate_url_hash(str(hash(analysis_text))),
-                "model_used": "gemini-2.0-flash-exp",
+                "model_used": GEMINI_MODEL,
                 "video_metadata": {
                     "file_size_mb": round(file_size / (1024 * 1024), 2) if file_size else None,
                     "duration_seconds": duration_seconds,
@@ -1042,302 +992,30 @@ Provide detailed, factual observations that would help understand the video's ma
 
 
 @mcp.tool(
-  description="REQUIRED for batch analyzing multiple video ads from Facebook for maximum token efficiency. Download and analyze multiple ad videos using Gemini's advanced video understanding in a single API call. This significantly reduces token costs compared to individual video analysis. Uses intelligent caching and includes comprehensive batch video analysis with shared prompt optimization.",
+  description="Load a playbook: the step-by-step method for an ad research job (which tool calls, what to look for, output format). Call it BEFORE starting when the request matches a job, then follow it. Jobs:\n" + "\n".join(f"- {job}: {trigger}" for job, trigger in TRIGGERS.items()),
   annotations={
-    "title": "Batch Analyze Ad Video Content",
+    "title": "Get Analysis Playbook",
     "readOnlyHint": True,
-    "openWorldHint": True
+    "openWorldHint": False
   }
 )
-def analyze_ad_videos_batch(media_urls: List[str], brand_names: Optional[List[str]] = None, ad_ids: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Download and batch analyze multiple Facebook ad videos using Gemini for token efficiency.
-    
-    This tool downloads multiple videos from Facebook Ad Library URLs and analyzes them
-    in a single Gemini API call, sharing prompt tokens for significant cost savings.
-    Videos are cached locally to avoid re-downloading, and analysis results are cached
-    to improve performance and reduce API costs.
-    
-    Args:
-        media_urls: List of direct URLs to Facebook ad videos to analyze.
-        brand_names: Optional list of brand names for cache organization (must match media_urls length).
-        ad_ids: Optional list of ad IDs for tracking purposes (must match media_urls length).
-    
-    Returns:
-        A dictionary containing:
-        - success: Boolean indicating if batch analysis was successful
-        - message: Status message
-        - results: List of analysis results for each video in order
-        - batch_info: Information about batch processing efficiency
-        - total_processed: Number of videos successfully analyzed
-        - token_savings: Estimated token savings vs individual analysis
-        - cache_status: Information about cache usage
-        - error: Error details if analysis failed
-    """
-    if not media_urls or not isinstance(media_urls, list):
-        return {
-            "success": False,
-            "message": "Media URLs must be provided as a non-empty list.",
-            "results": [],
-            "total_processed": 0,
-            "error": "Missing or invalid media URLs"
-        }
-    
-    # Validate input lists have matching lengths
-    if brand_names and len(brand_names) != len(media_urls):
-        return {
-            "success": False,
-            "message": "Brand names list must match media URLs list length.",
-            "results": [],
-            "total_processed": 0,
-            "error": "Mismatched input list lengths"
-        }
-    
-    if ad_ids and len(ad_ids) != len(media_urls):
-        return {
-            "success": False,
-            "message": "Ad IDs list must match media URLs list length.",
-            "results": [],
-            "total_processed": 0,
-            "error": "Mismatched input list lengths"
-        }
-    
-    try:
-        # Check cache for all videos using batch operations
-        cached_results = media_cache.get_cached_media_batch(media_urls, media_type='video')
-        
-        videos_to_analyze = []
-        video_contexts = []
-        cached_analyses = []
-        
-        for i, media_url in enumerate(media_urls):
-            brand_name = brand_names[i] if brand_names else None
-            ad_id = ad_ids[i] if ad_ids else None
-            
-            cached_data = cached_results.get(media_url)
-            
-            if cached_data and cached_data.get('analysis_results'):
-                # Use cached analysis
-                cached_analyses.append({
-                    "media_url": media_url,
-                    "analysis": cached_data['analysis_results'],
-                    "cached": True,
-                    "brand_name": brand_name,
-                    "ad_id": ad_id
-                })
-            else:
-                # Need to analyze this video
-                videos_to_analyze.append({
-                    "url": media_url,
-                    "brand_name": brand_name,
-                    "ad_id": ad_id,
-                    "cached_data": cached_data
-                })
-                video_contexts.append({
-                    "brand_name": brand_name,
-                    "ad_id": ad_id
-                })
-        
-        analysis_results = list(cached_analyses)  # Start with cached results
-        
-        if videos_to_analyze:
-            # Configure Gemini API
-            try:
-                model = configure_gemini()
-            except Exception as e:
-                return {
-                    "success": False,
-                    "message": f"Failed to configure Gemini API: {str(e)}. Ensure GEMINI_API_KEY environment variable is set.",
-                    "results": cached_analyses,
-                    "total_processed": len(cached_analyses),
-                    "error": f"Gemini configuration error: {str(e)}"
-                }
-            
-            # Download uncached videos and prepare for analysis
-            video_paths = []
-            video_files_for_analysis = []
-            
-            for video_info in videos_to_analyze:
-                media_url = video_info["url"]
-                cached_data = video_info["cached_data"]
-                
-                if cached_data:
-                    # Video is cached but needs analysis
-                    video_paths.append(cached_data['file_path'])
-                else:
-                    # Download video
-                    try:
-                        response = requests.get(media_url, timeout=60)
-                        response.raise_for_status()
-                        
-                        # Check if it's a video
-                        content_type = response.headers.get('content-type', '').lower()
-                        if not any(vid_type in content_type for vid_type in ['video/', 'mp4', 'mov', 'webm', 'avi']):
-                            logger.warning(f"Invalid video content type for {media_url}: {content_type}")
-                            continue
-                        
-                        # Cache the video
-                        file_path = media_cache.cache_media(
-                            url=media_url,
-                            media_data=response.content,
-                            content_type=content_type,
-                            media_type='video',
-                            brand_name=video_info["brand_name"],
-                            ad_id=video_info["ad_id"]
-                        )
-                        video_paths.append(file_path)
-                        
-                    except Exception as e:
-                        logger.error(f"Failed to download video {media_url}: {str(e)}")
-                        continue
-            
-            if video_paths:
-                # Upload videos to Gemini in batch
-                try:
-                    gemini_files = upload_videos_batch_to_gemini(model, video_paths)
-                    
-                    if gemini_files:
-                        # Create analysis prompt template
-                        analysis_prompt = """
-Analyze this Facebook ad video and provide a comprehensive, structured breakdown following this exact format:
+def get_playbook(job: str) -> str:
+    """Return the playbook text for a job: script_writing, competitor_teardown, product_hunt, who_is_advertising, competitor_watch."""
+    key = job.strip().lower().replace(" ", "_").replace("-", "_")
+    if key not in PLAYBOOKS:
+        return f"Unknown job '{job}'. Valid jobs: {', '.join(PLAYBOOKS)}."
+    return PLAYBOOKS[key]
 
-**SCENE ANALYSIS:**
-Analyze the video at a scene-by-scene level. For each identified scene, provide:
 
-Scene [Number]: [Brief scene title]
-1. Visual Description:
-   - Detailed description of key visuals within the scene
-   - Appearance and demographics of featured individuals (age, gender, notable characteristics)
-   - Specific camera angles and movements used
+def _playbook_prompt(job: str):
+    def prompt(brief: str = "") -> str:
+        return f"Run this playbook.{f' My brief: {brief}' if brief else ''}\n\n{PLAYBOOKS[job]}"
+    return prompt
 
-2. Text Elements:
-   - Document ALL text elements appearing in the scene
-   - Categorize each text element as:
-     * "Text Hook" (introductory text designed to grab attention)
-     * "CTA (middle)" (call-to-action appearing mid-video)
-     * "CTA (end)" (final call-to-action)
 
-3. Brand Elements:
-   - Note any visible brand logos or product placements
-   - Provide brief descriptions and specific timing within the scene
-
-4. Audio Analysis:
-   - Transcription or detailed summary of any voiceover present
-   - Describe voiceover characteristics: tone, pitch, conveyed emotions
-   - Identify and briefly describe notable sound effects
-
-5. Music Analysis:
-   - Music present: [true/false]
-   - If true: Brief description or identification of music style/track
-
-6. Scene Transition:
-   - Describe the style and pacing of transition to next scene (quick cuts, fades, dynamic transitions, etc.)
-
-**OVERALL VIDEO ANALYSIS:**
-
-**Ad Format:**
-- Identify the specific ad format (single video, carousel, story, etc.)
-- Aspect ratio and orientation
-- Duration and pacing style
-
-**Notable Angles:**
-- List all significant camera angles used throughout the video
-- Comment on their effectiveness and purpose
-
-**Overall Messaging:**
-- Primary message or value proposition
-- Secondary messages or supporting points
-- Target audience indicators
-
-**Hook Analysis:**
-- Primary hook type: Text, Visual, or VoiceOver
-- Description of the hook and its placement
-- Effectiveness assessment of attention-grabbing elements
-
-Provide detailed, factual observations that would help understand the video's marketing strategy and effectiveness.
-"""
-                        
-                        # Analyze videos in batch
-                        batch_analyses = analyze_videos_batch_with_gemini(
-                            model, gemini_files, analysis_prompt, video_contexts
-                        )
-                        
-                        # Process batch analysis results
-                        for i, analysis_text in enumerate(batch_analyses):
-                            if i < len(videos_to_analyze):
-                                video_info = videos_to_analyze[i]
-                                
-                                analysis_results_data = {
-                                    "raw_analysis": analysis_text,
-                                    "analysis_timestamp": media_cache._generate_url_hash(str(hash(analysis_text))),
-                                    "model_used": "gemini-2.0-flash-exp",
-                                    "batch_analysis": True,
-                                    "batch_position": i + 1,
-                                    "total_batch_size": len(videos_to_analyze)
-                                }
-                                
-                                # Cache analysis results
-                                media_cache.update_analysis_results(video_info["url"], analysis_results_data)
-                                
-                                analysis_results.append({
-                                    "media_url": video_info["url"],
-                                    "analysis": analysis_results_data,
-                                    "cached": False,
-                                    "brand_name": video_info["brand_name"],
-                                    "ad_id": video_info["ad_id"]
-                                })
-                        
-                        # Cleanup Gemini files
-                        cleanup_gemini_files_batch(model, [f.name for f in gemini_files])
-                        
-                except Exception as e:
-                    logger.error(f"Batch video analysis failed: {str(e)}")
-                    return {
-                        "success": False,
-                        "message": f"Failed to analyze videos in batch: {str(e)}",
-                        "results": cached_analyses,
-                        "total_processed": len(cached_analyses),
-                        "error": str(e)
-                    }
-        
-        # Calculate token savings estimate
-        total_videos = len(media_urls)
-        cached_count = len(cached_analyses)
-        analyzed_count = len(analysis_results) - cached_count
-        
-        # Rough estimate: batch analysis uses ~1.2x tokens of single analysis vs ~Nx tokens for individual calls
-        estimated_individual_tokens = analyzed_count * 1000  # Rough estimate per video
-        estimated_batch_tokens = analyzed_count * 120 if analyzed_count > 0 else 0  # Shared prompt overhead
-        token_savings_percent = ((estimated_individual_tokens - estimated_batch_tokens) / estimated_individual_tokens * 100) if estimated_individual_tokens > 0 else 0
-        
-        return {
-            "success": True,
-            "message": f"Successfully analyzed {total_videos} videos ({cached_count} from cache, {analyzed_count} newly analyzed in batch)",
-            "results": analysis_results,
-            "batch_info": {
-                "total_requested": total_videos,
-                "cached_results": cached_count,
-                "batch_analyzed": analyzed_count,
-                "gemini_api_calls": 1 if analyzed_count > 0 else 0,
-                "efficiency_gain": f"{analyzed_count}x videos in 1 API call" if analyzed_count > 1 else None
-            },
-            "total_processed": total_videos,
-            "token_savings": {
-                "estimated_savings_percent": round(token_savings_percent, 1),
-                "batch_tokens_used": estimated_batch_tokens,
-                "individual_tokens_saved": estimated_individual_tokens - estimated_batch_tokens
-            },
-            "cache_status": f"{cached_count} cached, {analyzed_count} newly analyzed",
-            "error": None
-        }
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "message": f"Failed to process video batch: {str(e)}",
-            "results": [],
-            "total_processed": 0,
-            "error": str(e)
-        }
+# The same playbooks in the host's prompt menu (Claude Desktop, Claude Code, Cursor).
+for _job, _trigger in TRIGGERS.items():
+    mcp.prompt(name=_job, title=_job.replace("_", " ").capitalize(), description=f"Playbook for {_trigger}.")(_playbook_prompt(_job))
 
 
 if __name__ == "__main__":

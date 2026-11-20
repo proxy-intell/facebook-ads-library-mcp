@@ -1,6 +1,7 @@
 import requests
 import sys
 import os
+import time
 import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Union
@@ -11,6 +12,7 @@ logger.setLevel(logging.DEBUG)
 
 SEARCH_API_URL = "https://api.scrapecreators.com/v1/facebook/adLibrary/search/companies"
 ADS_API_URL = "https://api.scrapecreators.com/v1/facebook/adLibrary/company/ads"
+SEARCH_ADS_API_URL = "https://api.scrapecreators.com/v1/facebook/adLibrary/search/ads"
 
 
 SCRAPECREATORS_API_KEY = None
@@ -132,6 +134,25 @@ def get_scrapecreators_api_key() -> str:
     return SCRAPECREATORS_API_KEY
 
 
+def _get(url: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """GET a ScrapeCreators endpoint. Retries once on a 5xx or dropped connection, then raises."""
+    for attempt in range(2):
+        try:
+            response = requests.get(url, headers={"x-api-key": get_scrapecreators_api_key()}, params=params, timeout=30)
+        except requests.ConnectionError:
+            if attempt:
+                raise
+            time.sleep(2)
+            continue
+        if response.status_code >= 500 and not attempt:
+            logger.warning(f"ScrapeCreators returned {response.status_code}, retrying once")
+            time.sleep(2)
+            continue
+        check_credit_status(response)
+        response.raise_for_status()
+        return response.json()
+
+
 def get_platform_id(brand_name: str) -> Dict[str, str]:
     """
     Get the Meta Platform ID for a given brand name.
@@ -146,21 +167,7 @@ def get_platform_id(brand_name: str) -> Dict[str, str]:
         requests.RequestException: If the API request fails.
         Exception: For other errors.
     """
-    api_key = get_scrapecreators_api_key()
-    
-    response = requests.get(
-        SEARCH_API_URL,
-        headers={"x-api-key": api_key},
-        params={
-            "query": brand_name,
-        },
-        timeout=30  # Add timeout for better error handling
-    )
-    
-    # Check for credit-related issues before raising for status
-    credit_info = check_credit_status(response)
-    response.raise_for_status()
-    content = response.json()
+    content = _get(SEARCH_API_URL, {"query": brand_name})
     logger.info(f"Search response for '{brand_name}': {len(content.get('searchResults', []))} results found")
     
     options = {}
@@ -195,71 +202,33 @@ def get_ads(
         requests.RequestException: If the API request fails.
         Exception: For other errors.
     """
-    api_key = get_scrapecreators_api_key()
-    cursor = None
-    headers = {
-        "x-api-key": api_key
-    }
     params = {
         "pageId": page_id,
         "limit": min(limit, 100)  # Ensure we don't exceed API limits
     }
-    
-    # Add optional parameters if provided
     if country:
         params["country"] = country.upper()
     if trim:
         params["trim"] = "true"
 
     ads = []
-    total_requests = 0
-    max_requests = 10  # Allow more requests for comprehensive data
-    
-    while len(ads) < limit and total_requests < max_requests:
-        if cursor:
-            params['cursor'] = cursor
-        
+    for page in range(10):
         try:
-            response = requests.get(
-                ADS_API_URL, 
-                headers=headers, 
-                params=params,
-                timeout=30
-            )
-            total_requests += 1
-            
-            # Check for credit-related issues
-            try:
-                credit_info = check_credit_status(response)
-            except (CreditExhaustedException, RateLimitException):
-                # Re-raise credit/rate limit exceptions to be handled by caller
-                raise
-            
-            if response.status_code != 200:
-                logger.error(f"Error getting FB ads for page {page_id}: {response.status_code} {response.text}")
-                break
-                
-            resJson = response.json()
-            logger.info(f"Retrieved {len(resJson.get('results', []))} ads from API (request {total_requests})")
-            
-            res_ads = parse_fb_ads(resJson, trim)
-            if len(res_ads) == 0:
-                logger.info("No more ads found, stopping pagination")
-                break
-                
-            ads.extend(res_ads)
-            
-            # Get cursor for next page
-            cursor = resJson.get('cursor')
-            if not cursor:
-                logger.info("No cursor found, reached end of results")
-                break
-                
+            resJson = _get(ADS_API_URL, params)
+        except (CreditExhaustedException, RateLimitException):
+            raise
         except requests.RequestException as e:
-            logger.error(f"Network error while fetching ads: {str(e)}")
+            # An error on the first page is a failed lookup, not "no ads": let the caller report it.
+            if page == 0:
+                raise
+            logger.warning(f"Stopped paging ads for {page_id} after {page} page(s): {e}")
             break
-        except Exception as e:
-            logger.error(f"Error processing ads response: {str(e)}")
+        res_ads = parse_fb_ads(resJson, trim)
+        if not res_ads:
+            break
+        ads.extend(res_ads)
+        params["cursor"] = resJson.get("cursor")
+        if not params["cursor"] or len(ads) >= limit:
             break
 
     # Trim to requested limit
@@ -303,7 +272,7 @@ def get_platform_ids_batch(brand_names: List[str]) -> Dict[str, Dict[str, str]]:
     return results
 
 
-def get_ads_batch(platform_ids: List[str], limit: int = 50, country: Optional[str] = None, trim: bool = True) -> Dict[str, List[Dict[str, Any]]]:
+def get_ads_batch(platform_ids: List[str], limit: int = 50, country: Optional[str] = None, trim: bool = True) -> Dict[str, Union[List[Dict[str, Any]], Dict[str, str]]]:
     """
     Get ads for multiple platform IDs with deduplication.
     
@@ -315,7 +284,7 @@ def get_ads_batch(platform_ids: List[str], limit: int = 50, country: Optional[st
     
     Returns:
         Dictionary mapping platform IDs to their ad results.
-        Format: {platform_id: [ad_objects...], ...}
+        Format: {platform_id: [ad_objects...] or {"error": "..."}, ...}
     
     Raises:
         CreditExhaustedException: If API credits are exhausted
@@ -337,10 +306,66 @@ def get_ads_batch(platform_ids: List[str], limit: int = 50, country: Optional[st
             # Re-raise credit/rate limit exceptions immediately
             raise
         except Exception as e:
+            # Keep the error visible: an empty list would read as "this brand runs no ads".
             logger.error(f"Failed to get ads for platform ID '{platform_id}': {str(e)}")
-            results[platform_id] = []
+            results[platform_id] = {"error": str(e)}
     
     return results
+
+
+SEARCH_SORTS = ("relevancy_monthly_grouped", "total_impressions")
+SEARCH_STATUSES = ("ACTIVE", "INACTIVE", "ALL")
+SEARCH_MEDIA_TYPES = ("all", "image", "video")
+SEARCH_TYPES = ("keyword_unordered", "keyword_exact_phrase")
+
+
+def search_ads(
+    query: str,
+    limit: int = 30,
+    country: Optional[str] = None,
+    status: Optional[str] = None,
+    media_type: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    search_type: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    trim: bool = True,
+) -> Dict[str, Any]:
+    """Search the whole Meta Ad Library by keyword. Pages up to 5 times until `limit` ads are found.
+
+    Returns {"ads": [...], "total": library-wide match count or None, "cursor": next page or None}.
+    """
+    params = {k: v for k, v in {
+        "query": query,
+        "country": country,
+        "status": status,
+        # Upstream's image bucket drops carousels, so "image" fetches everything and filters below.
+        "media_type": "VIDEO" if media_type == "video" else None,
+        "sort_by": sort_by,
+        "search_type": search_type,
+        "start_date": start_date,
+        "end_date": end_date,
+        "trim": "true" if trim else None,
+    }.items() if v}
+    ads, total = [], None
+    for page in range(5):
+        try:
+            data = _get(SEARCH_ADS_API_URL, params)
+        except (CreditExhaustedException, RateLimitException):
+            raise
+        except requests.RequestException as e:
+            if page == 0:
+                raise
+            logger.warning(f"Stopped paging keyword search '{query}' after {page} page(s): {e}")
+            break
+        if total is None:
+            total = data.get("searchResultsCount")
+        parsed = parse_fb_ads({"results": data.get("searchResults", [])}, trim)
+        ads.extend(a for a in parsed if media_type != "image" or a["media_type"] in ("IMAGE", "DCO"))
+        params["cursor"] = data.get("cursor")
+        if not params["cursor"] or len(ads) >= limit:
+            break
+    return {"ads": ads[:limit], "total": total, "cursor": params.get("cursor")}
 
 
 def parse_fb_ads(resJson: Dict[str, Any], trim: bool = True) -> List[Dict[str, Any]]:
@@ -415,6 +440,8 @@ def parse_fb_ads(resJson: Dict[str, Any], trim: bool = True) -> List[Dict[str, A
                 if media_url is not None and body_text:
                     ad_obj = {
                         'ad_id': ad_id,
+                        'page_id': ad.get('page_id'),
+                        'page_name': ad.get('page_name'),
                         'start_date': start_date,
                         'end_date': end_date,
                         'media_url': media_url,
@@ -425,8 +452,6 @@ def parse_fb_ads(resJson: Dict[str, Any], trim: bool = True) -> List[Dict[str, A
                     # Add additional fields if not trimming
                     if not trim:
                         ad_obj.update({
-                            'page_id': ad.get('page_id'),
-                            'page_name': ad.get('page_name'),
                             'currency': ad.get('currency'),
                             'funding_entity': ad.get('funding_entity'),
                             'impressions': ad.get('impressions'),

@@ -73,8 +73,12 @@ def _send(state: dict, tool_name: str) -> None:
 
 class TrackedFastMCP(FastMCP):
     async def call_tool(self, name, arguments):
-        result = list(await super().call_tool(name, arguments))
+        result = await super().call_tool(name, arguments)
         text = record_call(name)
-        if text:
-            result.append(TextContent(type="text", text=text))
-        return result
+        if not text:
+            return result
+        tip_block = TextContent(type="text", text=text)
+        # Tools with an output schema return (content, structured); keep the structured half as is.
+        if isinstance(result, tuple):
+            return [*result[0], tip_block], result[1]
+        return [*result, tip_block]

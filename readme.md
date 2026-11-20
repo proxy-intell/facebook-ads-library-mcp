@@ -12,7 +12,9 @@
 
 This is a Model Context Protocol (MCP) server for the Facebook Ads Library.
 
-With this you can search Facebook's public ads library for any company or brand, see what they're currently running and analyze their advertising. You can analyze ad images/text, analyze video ads with comprehensive insights, compare companies' strategies, and get insights into what's working in their campaigns.
+With this you can search Facebook's public ads library for any company or brand, or by keyword across every advertiser, see what they're currently running and analyze their advertising. You can analyze ad images/text, analyze video ads with comprehensive insights, compare companies' strategies, track what competitors launched since last week, and get insights into what's working in their campaigns.
+
+**New in v1.1:** keyword search across the whole library, "what changed since last fetch" on every brand pull, five built-in research playbooks, and video analysis on current Gemini models. See the [release notes](https://github.com/proxy-intell/facebook-ads-library-mcp/releases).
 
 Here's an example of what you can do when it's connected to Claude.
 
@@ -40,6 +42,9 @@ Prefer to run it yourself? The full self-host setup is documented below.
 | Ad libraries | Meta, Google, LinkedIn and TikTok (EU) in one server | Meta (Facebook, Instagram) only |
 | Cost | Free for 20 credits a day; paid plans for more | ScrapeCreators credits (about $1.88 per 1,000 calls) plus Gemini usage for video |
 | API keys | None, sign in with OAuth | ScrapeCreators, plus Gemini for video |
+| Keyword search across all advertisers | ✅ | ✅ |
+| What changed since last fetch | ✅ | ✅ |
+| Research playbooks (scripts, teardowns, product hunting) | ✅ | ✅ |
 | Competitor discovery and competitive brief | ✅ | ❌ |
 | Inline ad carousel | ✅ | ❌ |
 | ChatGPT and claude.ai | ✅ (ChatGPT app and Claude connector) | ❌ (they need a public OAuth server) |
@@ -67,7 +72,31 @@ What messaging is 'AnthropicAI' running right now in their ads?
 Analyze the video ads from 'Nike' and extract their visual storytelling strategy, pacing, and brand messaging techniques.
 ```
 
-### Batch Analysis (New!)
+### Keyword Search
+
+```plaintext
+Who is advertising posture correctors in the US right now? Group the ads by advertiser.
+```
+
+```plaintext
+Find video ads about "meal prep" with the most impressions and break down their hooks.
+```
+
+### Competitor Tracking
+
+```plaintext
+Pull Gymshark's and Alo Yoga's ads. I'll ask again next week: tell me what's new then.
+```
+
+### Playbooks
+
+Your MCP client's prompt menu now lists five playbooks: `script_writing`, `competitor_teardown`, `product_hunt`, `who_is_advertising` and `competitor_watch`. Or just ask, and the model loads the right one with `get_playbook`:
+
+```plaintext
+Write me 3 UGC scripts for my sleep gummies based on the longest-running video ads in the niche.
+```
+
+### Batch Analysis
 
 ```plaintext
 Compare the current advertising strategies across Nike, Adidas, and Under Armour. Show me their ad volumes, messaging themes, and creative approaches.
@@ -202,10 +231,11 @@ This MCP server provides tools for interacting with Facebook Ads library objects
 | Tool Name                 | Description                                                                | Batch Support           |
 | ------------------------- | -------------------------------------------------------------------------- | ----------------------- |
 | `get_meta_platform_id`    | Returns platform ID given one or many brand names                          | ✅ Multiple brands       |
-| `get_meta_ads`            | Retrieves ads for specific page(s) (platform ID)                           | ✅ Multiple platform IDs |
-| `analyze_ad_image`        | Analyzes ad images for visual elements, text, colors, and composition      | ⚡ Enhanced caching      |
-| `analyze_ad_video`        | Analyzes single ad video using Gemini AI for comprehensive insights        | ⚡ Enhanced caching      |
-| `analyze_ad_videos_batch` | **NEW** - Analyzes multiple videos in single API call for token efficiency | 🎬 ~88% token savings   |
+| `get_meta_ads`            | Retrieves ads for specific page(s), plus what changed since the last fetch | ✅ Multiple platform IDs |
+| `search_meta_ads_by_keyword` | **NEW** - Searches every advertiser's ads by keyword, country, format, date | Up to 5 pages      |
+| `analyze_ad_image`        | Returns the ad image to the model for visual analysis                      | ⚡ Enhanced caching      |
+| `analyze_ad_video`        | Analyzes an ad video with Gemini (set `GEMINI_MODEL` to change the model)  | ⚡ Enhanced caching      |
+| `get_playbook`            | **NEW** - Step-by-step method for a research job (also served as prompts)  | -                       |
 | `get_cache_stats`         | Gets statistics about cached media (images and videos) and storage usage   | -                       |
 | `search_cached_media`     | Searches previously analyzed media by brand, colors, people, or media type | -                       |
 | `cleanup_media_cache`     | Cleans up old cached media files to free disk space                        | -                       |
@@ -241,6 +271,7 @@ This MCP server provides tools for interacting with Facebook Ads library objects
 
 - Confirm you have a valid Google Gemini API key in your `.env` file
 - Video analysis requires the `GEMINI_API_KEY` environment variable
+- If Gemini says the model is not found, set `GEMINI_MODEL` in `.env` to a current model from [Google's model list](https://ai.google.dev/gemini-api/docs/models)
 
 **MCP Server Connection Issues:**
 
