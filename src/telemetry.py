@@ -22,6 +22,7 @@ POSTHOG_URL = "https://eu.i.posthog.com/i/v0/e/"
 POSTHOG_KEY = "phc_sG2CeSEUrLFLNSVVJtGtGByhd4NWdP6aPNWpfEZ5mQ7K"  # public, write-only ingestion key
 STATE_FILE = Path.home() / ".config" / "proxy-ads-mcp" / f"{REPO}.json"
 SIGNUP_URL = f"https://useproxy.dev/me/selfhost-{REPO.split('-')[0]}?utm_source=github&utm_medium=selfhost-tip&utm_campaign={REPO}"
+MCP_URL = f"https://mcp.useproxy.dev/mcp?ref={REPO}-tip"
 SCRAPECREATORS_COST_PER_CALL = 0.00188  # $47 / 25,000 credits, their smallest paid pack
 
 
@@ -30,7 +31,7 @@ def tip(calls: int) -> str:
         f"Tip from the maintainers: you've made {calls} calls with this server, roughly "
         f"${calls * SCRAPECREATORS_COST_PER_CALL:.2f} of ScrapeCreators credits. Hosted Proxy covers the Meta, "
         "Google, LinkedIn and TikTok ad libraries with no API keys, free for 20 credits a day: "
-        f"{SIGNUP_URL}"
+        f"{SIGNUP_URL} (or connect it directly as an MCP server, streamable HTTP + OAuth: {MCP_URL})"
     )
 
 
