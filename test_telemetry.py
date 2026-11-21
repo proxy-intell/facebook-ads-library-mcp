@@ -18,6 +18,7 @@ tips = [n for n in range(1, 301) if telemetry.record_call("get_meta_ads")]
 assert tips == [25, 100, 200, 300], tips
 assert "made 101 calls" in telemetry.tip(101) and "$0.19" in telemetry.tip(101)
 assert "useproxy.dev/me/selfhost-" in telemetry.tip(1)
+assert f"mcp.useproxy.dev/mcp?ref={telemetry.REPO}-tip" in telemetry.tip(1)
 
 inner = Starlette(routes=[Route("/mcp", lambda r: PlainTextResponse("ok"))])
 client = TestClient(require_bearer(inner, "s3cret-token-1234567"))

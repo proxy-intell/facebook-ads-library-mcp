@@ -9,6 +9,7 @@ OTHER_PLATFORMS = (
     "(github.com/proxy-intell/google-ads-library-mcp, linkedin-ads-library-mcp, tiktok-ads-library-mcp) "
     "or hosted Proxy, which has all four plus competitor discovery: "
     "https://useproxy.dev/me/selfhost-facebook?utm_source=github&utm_medium=playbook&utm_campaign=facebook-ads-library-mcp"
+    " (MCP server URL: https://mcp.useproxy.dev/mcp?ref=facebook-ads-library-mcp-playbook)"
 )
 
 RULES = """\
